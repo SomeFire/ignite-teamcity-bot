@@ -21,6 +21,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Stopwatch;
 import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.gson.Gson;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -48,6 +49,7 @@ import org.apache.ignite.ci.analysis.LogCheckResult;
 import org.apache.ignite.ci.analysis.LogCheckTask;
 import org.apache.ignite.ci.analysis.MultBuildRunCtx;
 import org.apache.ignite.ci.analysis.SingleBuildRunCtx;
+import org.apache.ignite.ci.github.PullRequest;
 import org.apache.ignite.ci.logs.BuildLogStreamChecker;
 import org.apache.ignite.ci.logs.LogsAnalyzer;
 import org.apache.ignite.ci.logs.handlers.TestLogHandler;
@@ -86,6 +88,7 @@ import static org.apache.ignite.ci.HelperConfig.ensureDirExist;
  *
  * See more info about API
  * https://confluence.jetbrains.com/display/TCD10/REST+API
+ * https://developer.github.com/v3/
  */
 public class IgniteTeamcityHelper implements ITeamcity {
     /** Logger. */
@@ -96,6 +99,7 @@ public class IgniteTeamcityHelper implements ITeamcity {
     /** Normalized Host address, ends with '/'. */
     private final String host;
     private String basicAuthTok;
+    private String gitAuthTok;
     private final String configName; //main properties file name
     private final String tcName;
 
@@ -119,6 +123,8 @@ public class IgniteTeamcityHelper implements ITeamcity {
             e.printStackTrace();
         }
 
+        setGitToken(HelperConfig.prepareGithubHttpAuthToken(props));
+
         final File logsDirFile = HelperConfig.resolveLogs(workDir, props);
 
         logsDir = ensureDirExist(logsDirFile);
@@ -126,8 +132,54 @@ public class IgniteTeamcityHelper implements ITeamcity {
         this.executor =  MoreExecutors.directExecutor();
     }
 
-    public void setAuthToken(String token) {
+    /** {@inheritDoc} */
+    @Override public void setAuthToken(String token) {
         basicAuthTok = token;
+    }
+
+    /** {@inheritDoc} */
+    @Override public void setGitToken(String token) {
+        gitAuthTok = token;
+    }
+
+    /** {@inheritDoc} */
+    @Override public boolean notifyGit(String url, String body) {
+        try {
+            HttpUtil.sendPostAsStringToGit(gitAuthTok, url, body);
+
+            return true;
+        }
+        catch (IOException e) {
+            logger.error("Failed to notify Git [errMsg="+e.getMessage()+']');
+
+            return false;
+        }
+    }
+
+    /** {@inheritDoc} */
+    @Override public PullRequest getPullRequest(String branch) {
+        String id = null;
+
+        for (int i = 5; i < branch.length(); i++) {
+            char c = branch.charAt(i);
+
+            if (!Character.isDigit(c)) {
+                id = branch.substring(5, i);
+
+                break;
+            }
+        }
+
+        String pr = "https://api.github.com/repos/" + serverId() + "/ignite/pulls/" + id;
+
+        try (InputStream is = HttpUtil.sendGetToGit(gitAuthTok, pr)) {
+            InputStreamReader reader = new InputStreamReader(is);
+
+            return new Gson().fromJson(reader, PullRequest.class);
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     /** {@inheritDoc} */

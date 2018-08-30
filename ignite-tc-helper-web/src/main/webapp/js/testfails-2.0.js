@@ -2,6 +2,7 @@
 //loadStatus element should be provided on page
 //triggerConfirm & triggerDialog element should be provided on page (may be hidden)
 var g_initMoreInfoDone = false;
+var g_srv;
 
 //@param results - TestFailuresSummary
 function showChainOnServersResults(result) {
@@ -143,16 +144,100 @@ function showChainCurrentStatusData(server, settings) {
 
     res += "</td></tr>";
 
+    res += addBlockersData(server, settings);
 
     for (var i = 0; i < server.suites.length; i++) {
         var suite = server.suites[i];
-        res += showSuiteData(suite, settings);
+
+        res += showSuiteData(suite, settings, false);
     }
 
     res += "<tr><td colspan='4'>&nbsp;</td></tr>";
     res += "</table>"
 
     return res;
+}
+
+/**
+ * Creates table with possible blockers.
+ *
+ * @param server - see ChainAtServerCurrentStatus Java class.
+ * @param settings - see Settings JavaScript class.
+ * @returns {string} Table rows with possible blockers and table headers.
+ * Or empty string if no blockers found.
+ */
+function addBlockersData(server, settings) {
+    var blockers = "";
+
+    for (var i = 0; i < server.suites.length; i++) {
+        var suite = server.suites[i];
+
+        blockers += showSuiteData(suite, settings, true);
+    }
+
+    if (blockers != "") {
+        g_srv = server;
+
+        blockers = "<tr bgcolor='#F5F5FF'><td colspan='3' class='table-title'><b>Possible Blockers</b></td>" +
+            "<td><button onclick='notifyGit()'>Write to PR</button></td></tr>" +
+            blockers +
+            "<tr bgcolor='#F5F5FF'><td colspan='4' class='table-title'><b>Other failures</b></td></tr>";
+    }
+
+    return blockers;
+}
+
+/**
+ * Send POST request to change PR status.
+ *
+ * @returns {string}
+ */
+function notifyGit() {
+    var server = g_srv;
+    var suites = 0;
+    var tests = 0;
+
+    for (let suite of server.suites) {
+        if (suite.result != "") {
+            suites++;
+
+            continue;
+        }
+
+        for (let testFailure of suite.testFailures) {
+            if (isNewFailedTest(testFailure))
+                tests++;
+        }
+    }
+
+    var state;
+    var desc;
+
+    if (suites == 0 && tests == 0) {
+        state = "success";
+        desc = "No blockers found.";
+    }
+    else {
+        state = "failure";
+        desc = suites + " critical suites, " + tests + " failed tests.";
+    }
+
+    var msg = {
+        state: state,
+        target_url: server.webToHist,
+        description: desc,
+        context: "TeamCity"
+    };
+
+    var notifyGitUrl = "rest/pr/notifyGit"  + parmsForRest();
+
+    $.ajax({
+        url: notifyGitUrl,
+        type: 'POST',
+        data: {notifyMsg: JSON.stringify(msg)},
+        success: function() {$("#loadStatus").html("Github was notified.");},
+        error: showErrInLoadStatus
+    });
 }
 
 function triggerBuild(serverId, suiteId, branchName, top) {
@@ -235,8 +320,18 @@ function triggerBuilds(serverId, suiteIdList, branchName, top) {
     });
 }
 
-//@param suite - see SuiteCurrentStatus
-function showSuiteData(suite, settings) {
+/**
+ * Create html string with table rows, containing suite data.
+ *
+ * @param suite - see SuiteCurrentStatus Java class.
+ * @param settings - see Settings JavaScript class.
+ * @param criticalOnly - true if we need to show only 0.0% tests. False otherwise.
+ * @returns {string} Table rows with suite data.
+ */
+function showSuiteData(suite, settings, criticalOnly) {
+    if (criticalOnly && !containsCtriticalFailures(suite))
+        return "";
+
     var moreInfoTxt = "";
 
     if (isDefinedAndFilled(suite.userCommits) && suite.userCommits != "") {
@@ -364,7 +459,10 @@ function showSuiteData(suite, settings) {
     res += " </tr>";
 
     for (var i = 0; i < suite.testFailures.length; i++) {
-        res += showTestFailData(suite.testFailures[i], true, settings);
+        var testFailure = suite.testFailures[i];
+
+        if (!criticalOnly || isNewFailedTest(testFailure) || testFailure.name.includes("(last started)"))
+            res += showTestFailData(testFailure, true, settings);
     }
 
     if (isDefinedAndFilled(suite.webUrlThreadDump)) {
@@ -379,6 +477,34 @@ function showSuiteData(suite, settings) {
     res += "<tr><td>&nbsp;</td><td width='12px'>&nbsp;</td><td colspan='2'></td></tr>";
 
     return res;
+}
+
+/**
+ * Check suite for critical failures like suite timeout, compilation fail and new failed tests.
+ *
+ * @param suite - see SuiteCurrentStatus Java class.
+ * @returns {boolean} True - if suite contains critical failures.
+ */
+function containsCtriticalFailures(suite) {
+    if (suite.result != "")
+        return true;
+
+    for (let testFailure of suite.testFailures) {
+        if (isNewFailedTest(testFailure))
+            return true;
+    }
+
+    return false;
+}
+
+/**
+ * Check that given test is new.
+ *
+ * @param testFailure - see TestFailure Java class.
+ * @returns {boolean} True - if test is new. False - otherwise.
+ */
+function isNewFailedTest(testFailure) {
+    return testFailure.failureRate == "0,0" || testFailure.flakyComments == null;
 }
 
 function failureRateToColor(failureRate) {

@@ -17,10 +17,13 @@
 
 package org.apache.ignite.ci.web.rest.pr;
 
+import javax.ws.rs.FormParam;
+import javax.ws.rs.POST;
 import org.apache.ignite.ci.*;
 import org.apache.ignite.ci.analysis.FullChainRunCtx;
 import org.apache.ignite.ci.analysis.mode.LatestRebuildMode;
 import org.apache.ignite.ci.analysis.mode.ProcessLogsMode;
+import org.apache.ignite.ci.github.PullRequest;
 import org.apache.ignite.ci.tcmodel.hist.BuildRef;
 import org.apache.ignite.ci.user.ICredentialsProv;
 import org.apache.ignite.ci.web.BackgroundUpdater;
@@ -166,5 +169,30 @@ public class GetPrTestFailures {
         res.postProcess(runningUpdates.get());
 
         return res;
+    }
+
+    @POST
+    @Path("notifyGit")
+    public String getNotifyGit(
+        @Nullable @QueryParam("serverId") String srvId,
+        @Nonnull @QueryParam("suiteId") String suiteId,
+        @Nonnull @QueryParam("branchForTc") String branchForTc,
+        @Nonnull @QueryParam("action") String action,
+        @Nullable @QueryParam("count") Integer count,
+        @Nonnull @FormParam("notifyMsg") String msg) {
+        if (!branchForTc.startsWith("pull/"))
+            return "Given branch is not a pull request. Notify works only for pull requests.";
+
+        ITcHelper tcHelper = CtxListener.getTcHelper(context);
+        final ICredentialsProv creds = ICredentialsProv.get(req);
+
+        try (IAnalyticsEnabledTeamcity teamcity = tcHelper.server(srvId, creds)) {
+            PullRequest pr = teamcity.getPullRequest(branchForTc);
+            String statusesUrl = pr.getStatusesUrl();
+
+            teamcity.notifyGit(statusesUrl, msg);
+        }
+
+        return "Git was notified.";
     }
 }
