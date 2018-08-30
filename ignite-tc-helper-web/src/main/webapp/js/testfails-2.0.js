@@ -2,6 +2,7 @@
 //loadStatus element should be provided on page
 //triggerConfirm & triggerDialog element should be provided on page (may be hidden)
 var g_initMoreInfoDone = false;
+var g_srv;
 
 //@param results - TestFailuresSummary
 function showChainOnServersResults(result) {
@@ -175,12 +176,68 @@ function addBlockersData(server, settings) {
     }
 
     if (blockers != "") {
-        blockers = "<tr bgcolor='#F5F5FF'><td colspan='4' class='table-title'><b>Possible Blockers</b></td></tr>" +
+        g_srv = server;
+
+        blockers = "<tr bgcolor='#F5F5FF'><td colspan='3' class='table-title'><b>Possible Blockers</b></td>" +
+            "<td><button onclick='notifyGit()'>Write to PR</button></td></tr>" +
             blockers +
             "<tr bgcolor='#F5F5FF'><td colspan='4' class='table-title'><b>Other failures</b></td></tr>";
     }
 
     return blockers;
+}
+
+/**
+ * Send POST request to change PR status.
+ *
+ * @returns {string}
+ */
+function notifyGit() {
+    var server = g_srv;
+    var suites = 0;
+    var tests = 0;
+
+    for (let suite of server.suites) {
+        if (suite.result != "") {
+            suites++;
+
+            continue;
+        }
+
+        for (let testFailure of suite.testFailures) {
+            if (isNewFailedTest(testFailure))
+                tests++;
+        }
+    }
+
+    var state;
+    var desc;
+
+    if (suites == 0 && tests == 0) {
+        state = "success";
+        desc = "No blockers found.";
+    }
+    else {
+        state = "failure";
+        desc = suites + " critical suites, " + tests + " failed tests.";
+    }
+
+    var msg = {
+        state: state,
+        target_url: server.webToHist,
+        description: desc,
+        context: "TeamCity"
+    };
+
+    var notifyGitUrl = "rest/pr/notifyGit"  + parmsForRest();
+
+    $.ajax({
+        url: notifyGitUrl,
+        type: 'POST',
+        data: {notifyMsg: JSON.stringify(msg)},
+        success: function() {$("#loadStatus").html("Github was notified.");},
+        error: showErrInLoadStatus
+    });
 }
 
 function triggerBuild(serverId, suiteId, branchName, top) {
